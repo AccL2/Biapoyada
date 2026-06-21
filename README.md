@@ -14,5 +14,5 @@ Aplicación para cálculo de vigas de madera según CTE DB SE-M.
 
 pip install -r requirements.txt
 
-streamlit run app.py
+streamlit run biapoyada.py
 
