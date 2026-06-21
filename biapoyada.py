@@ -22,8 +22,8 @@ I = st.sidebar.number_input("Momento de inercia I (cm⁴)", 1.0, 100000.0, 5000.
 
 # Tipo de apoyos
 st.sidebar.subheader("Apoyos")
-apoyo_A = st.sidebar.selectbox("Apoyo A (izquierda)", ["Articulado", "Rodillo"], index=0)
-apoyo_B = st.sidebar.selectbox("Apoyo B (derecha)", ["Articulado", "Rodillo"], index=1)
+apoyo_A = st.sidebar.selectbox("Apoyo A (izquierda)", ["Articulado", "Rodillo", "Empotrado"], index=0)
+apoyo_B = st.sidebar.selectbox("Apoyo B (derecha)", ["Articulado", "Rodillo", "Empotrado"], index=1)
 
 # Carga puntual
 st.sidebar.subheader("Carga Puntual")
@@ -35,40 +35,130 @@ b = L - a
 
 # Validación de configuración de apoyos
 def validar_apoyos(apoyo_A, apoyo_B):
+    """
+    Valida que la combinación de apoyos sea estáticamente determinada
+    """
+    # Casos no válidos
+    if apoyo_A == "Empotrado" and apoyo_B == "Empotrado":
+        return False, "⚠️ Viga con dos empotramientos es hiperestática (requiere análisis más complejo)"
+    
+    if apoyo_A == "Empotrado" and apoyo_B != "Libre":
+        return False, "⚠️ Viga empotrada-apoyada es hiperestática (no soportada en esta versión)"
+    
+    if apoyo_B == "Empotrado" and apoyo_A != "Libre":
+        return False, "⚠️ Viga apoyada-empotrada es hiperestática (no soportada en esta versión)"
+    
     if apoyo_A == "Rodillo" and apoyo_B == "Rodillo":
-        return False, "⚠️ No se puede tener dos rodillos (estructura inestable horizontalmente)"
+        return False, "⚠️ Dos rodillos hacen la estructura inestable horizontalmente"
+    
+    # Casos válidos para vigas isostáticas
+    configuraciones_validas = [
+        ("Articulado", "Articulado"),
+        ("Articulado", "Rodillo"),
+        ("Rodillo", "Articulado"),
+    ]
+    
+    if (apoyo_A, apoyo_B) not in configuraciones_validas:
+        return False, f"⚠️ Configuración {apoyo_A}-{apoyo_B} no soportada. Use: Articulado-Articulado, Articulado-Rodillo o Rodillo-Articulado"
+    
     return True, ""
 
 valido, mensaje_error = validar_apoyos(apoyo_A, apoyo_B)
 
 if not valido:
     st.error(mensaje_error)
+    st.warning("""
+    **Configuraciones válidas para vigas biapoyadas isostáticas:**
+    - ✅ Articulado - Articulado
+    - ✅ Articulado - Rodillo
+    - ✅ Rodillo - Articulado
+    
+    **No soportadas en esta versión:**
+    - ❌ Empotrado - Cualquiera (hiperestática)
+    - ❌ Rodillo - Rodillo (inestable)
+    """)
     st.stop()
 
+# Información sobre los apoyos seleccionados
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📍 Grados de libertad restringidos:")
+if apoyo_A == "Articulado":
+    st.sidebar.markdown("**Apoyo A (Articulado):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✓ Desplazamiento horizontal")
+    st.sidebar.markdown("- ✗ Rotación (libre)")
+elif apoyo_A == "Rodillo":
+    st.sidebar.markdown("**Apoyo A (Rodillo):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✗ Desplazamiento horizontal (libre)")
+    st.sidebar.markdown("- ✗ Rotación (libre)")
+elif apoyo_A == "Empotrado":
+    st.sidebar.markdown("**Apoyo A (Empotrado):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✓ Desplazamiento horizontal")
+    st.sidebar.markdown("- ✓ Rotación")
+
+if apoyo_B == "Articulado":
+    st.sidebar.markdown("**Apoyo B (Articulado):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✓ Desplazamiento horizontal")
+    st.sidebar.markdown("- ✗ Rotación (libre)")
+elif apoyo_B == "Rodillo":
+    st.sidebar.markdown("**Apoyo B (Rodillo):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✗ Desplazamiento horizontal (libre)")
+    st.sidebar.markdown("- ✗ Rotación (libre)")
+elif apoyo_B == "Empotrado":
+    st.sidebar.markdown("**Apoyo B (Empotrado):**")
+    st.sidebar.markdown("- ✓ Desplazamiento vertical")
+    st.sidebar.markdown("- ✓ Desplazamiento horizontal")
+    st.sidebar.markdown("- ✓ Rotación")
+
 # Cálculo de reacciones
-def calcular_reacciones(P, a, b, L):
+def calcular_reacciones(P, a, b, L, apoyo_A, apoyo_B):
     """
     Calcula las reacciones en los apoyos para una viga biapoyada.
     Convención: P positiva hacia abajo, reacciones positivas hacia arriba
     """
+    # Para vigas isostáticas biapoyadas
     R_B = (P * a) / L
     R_A = P - R_B
-    return R_A, R_B
+    
+    # Reacciones horizontales
+    if apoyo_A == "Articulado":
+        H_A = 0  # No hay cargas horizontales
+    else:
+        H_A = 0
+    
+    if apoyo_B == "Articulado":
+        H_B = 0
+    else:
+        H_B = 0
+    
+    return R_A, R_B, H_A, H_B
 
-R_A, R_B = calcular_reacciones(P, a, b, L)
+R_A, R_B, H_A, H_B = calcular_reacciones(P, a, b, L, apoyo_A, apoyo_B)
 
 # Mostrar resultados de reacciones
-col1, col2, col3 = st.columns(3)
+st.subheader("⚖️ Reacciones en los Apoyos")
+
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.metric("Reacción en A (R_A)", f"{R_A:.2f} kN", 
+    st.metric("Reacción Vertical A (R_A)", f"{R_A:.2f} kN", 
               delta="↑ Hacia arriba" if R_A > 0 else "↓ Hacia abajo")
 
 with col2:
-    st.metric("Reacción en B (R_B)", f"{R_B:.2f} kN",
+    st.metric("Reacción Vertical B (R_B)", f"{R_B:.2f} kN",
               delta="↑ Hacia arriba" if R_B > 0 else "↓ Hacia abajo")
 
 with col3:
+    if apoyo_A == "Articulado":
+        st.metric("Reacción Horizontal A (H_A)", f"{H_A:.2f} kN")
+    else:
+        st.metric("Reacción Horizontal A", "N/A")
+
+with col4:
     verificacion = R_A + R_B - P
     st.metric("Verificación ΣFy", f"{verificacion:.4f} kN",
               delta="✓ OK" if abs(verificacion) < 0.001 else "✗ ERROR")
@@ -136,41 +226,114 @@ fig.add_trace(
     row=1, col=1
 )
 
-# Apoyo A
-if apoyo_A == "Articulado":
-    fig.add_trace(
-        go.Scatter(x=[0], y=[0], mode='markers',
-                   marker=dict(size=25, color='blue', symbol='triangle-up', line=dict(width=2, color='darkblue')),
-                   name='Apoyo A',
-                   showlegend=False),
-        row=1, col=1
-    )
-else:
-    fig.add_trace(
-        go.Scatter(x=[0], y=[0], mode='markers',
-                   marker=dict(size=20, color='lightblue', symbol='circle', line=dict(width=2, color='blue')),
-                   name='Apoyo A',
-                   showlegend=False),
-        row=1, col=1
-    )
+# Función para dibujar apoyos
+def dibujar_apoyo(fig, x_pos, tipo_apoyo, label, row, col):
+    """Dibuja el símbolo del apoyo según su tipo"""
+    
+    if tipo_apoyo == "Articulado":
+        # Triángulo relleno
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos-0.15, x_pos, x_pos+0.15, x_pos-0.15],
+                y=[-0.3, 0, -0.3, -0.3],
+                fill='toself',
+                fillcolor='blue',
+                line=dict(color='darkblue', width=2),
+                mode='lines',
+                name=f'{label}: Articulado',
+                showlegend=False,
+                hoverinfo='text',
+                hovertext=f'{label}: Articulado<br>Restringe: X, Y<br>Libre: Rotación'
+            ),
+            row=row, col=col
+        )
+        # Base
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos-0.25, x_pos+0.25],
+                y=[-0.3, -0.3],
+                mode='lines',
+                line=dict(color='black', width=4),
+                showlegend=False
+            ),
+            row=row, col=col
+        )
+        
+    elif tipo_apoyo == "Rodillo":
+        # Triángulo
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos-0.15, x_pos, x_pos+0.15, x_pos-0.15],
+                y=[-0.3, 0, -0.3, -0.3],
+                fill='toself',
+                fillcolor='lightblue',
+                line=dict(color='blue', width=2),
+                mode='lines',
+                name=f'{label}: Rodillo',
+                showlegend=False,
+                hoverinfo='text',
+                hovertext=f'{label}: Rodillo<br>Restringe: Y<br>Libre: X, Rotación'
+            ),
+            row=row, col=col
+        )
+        # Círculos (rodillos)
+        for offset in [-0.15, 0, 0.15]:
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_pos + offset],
+                    y=[-0.4],
+                    mode='markers',
+                    marker=dict(size=12, color='white', 
+                               line=dict(color='blue', width=2)),
+                    showlegend=False
+                ),
+                row=row, col=col
+            )
+        # Base
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos-0.25, x_pos+0.25],
+                y=[-0.45, -0.45],
+                mode='lines',
+                line=dict(color='black', width=4),
+                showlegend=False
+            ),
+            row=row, col=col
+        )
+        
+    elif tipo_apoyo == "Empotrado":
+        # Rectángulo empotrado
+        fig.add_trace(
+            go.Scatter(
+                x=[x_pos-0.1, x_pos-0.1, x_pos+0.1, x_pos+0.1, x_pos-0.1],
+                y=[0.3, -0.3, -0.3, 0.3, 0.3],
+                fill='toself',
+                fillcolor='gray',
+                line=dict(color='black', width=3),
+                mode='lines',
+                name=f'{label}: Empotrado',
+                showlegend=False,
+                hoverinfo='text',
+                hovertext=f'{label}: Empotrado<br>Restringe: X, Y, Rotación'
+            ),
+            row=row, col=col
+        )
+        # Líneas de empotramiento
+        for y_line in np.linspace(-0.3, 0.3, 8):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_pos-0.1, x_pos-0.2],
+                    y=[y_line, y_line-0.08],
+                    mode='lines',
+                    line=dict(color='black', width=1),
+                    showlegend=False
+                ),
+                row=row, col=col
+            )
 
-# Apoyo B
-if apoyo_B == "Articulado":
-    fig.add_trace(
-        go.Scatter(x=[L], y=[0], mode='markers',
-                   marker=dict(size=25, color='blue', symbol='triangle-up', line=dict(width=2, color='darkblue')),
-                   name='Apoyo B',
-                   showlegend=False),
-        row=1, col=1
-    )
-else:
-    fig.add_trace(
-        go.Scatter(x=[L], y=[0], mode='markers',
-                   marker=dict(size=20, color='lightblue', symbol='circle', line=dict(width=2, color='blue')),
-                   name='Apoyo B',
-                   showlegend=False),
-        row=1, col=1
-    )
+# Dibujar apoyos
+dibujar_apoyo(fig, 0, apoyo_A, "Apoyo A", 1, 1)
+dibujar_apoyo(fig, L, apoyo_B, "Apoyo B", 1, 1)
 
 # Carga puntual P (hacia abajo)
 fig.add_trace(
@@ -194,9 +357,10 @@ fig.add_annotation(
     row=1, col=1
 )
 
+# Reacciones verticales
 # Reacción en A
 fig.add_trace(
-    go.Scatter(x=[0, 0], y=[-0.6, -0.05], mode='lines',
+    go.Scatter(x=[0, 0], y=[-0.7, -0.05], mode='lines',
                line=dict(color='green', width=4),
                showlegend=False),
     row=1, col=1
@@ -208,16 +372,16 @@ fig.add_trace(
     row=1, col=1
 )
 fig.add_annotation(
-    x=0, y=-0.8,
+    x=-0.3, y=-0.9,
     text=f"<b>R_A = {R_A:.2f} kN</b>",
     showarrow=False,
-    font=dict(size=12, color='green'),
+    font=dict(size=11, color='green'),
     row=1, col=1
 )
 
 # Reacción en B
 fig.add_trace(
-    go.Scatter(x=[L, L], y=[-0.6, -0.05], mode='lines',
+    go.Scatter(x=[L, L], y=[-0.7, -0.05], mode='lines',
                line=dict(color='green', width=4),
                showlegend=False),
     row=1, col=1
@@ -229,26 +393,33 @@ fig.add_trace(
     row=1, col=1
 )
 fig.add_annotation(
-    x=L, y=-0.8,
+    x=L+0.3, y=-0.9,
     text=f"<b>R_B = {R_B:.2f} kN</b>",
     showarrow=False,
-    font=dict(size=12, color='green'),
+    font=dict(size=11, color='green'),
     row=1, col=1
 )
 
 # Dimensiones
 fig.add_annotation(
-    x=a/2, y=-1.2,
+    x=a/2, y=-1.3,
     text=f"a = {a:.2f} m",
     showarrow=False,
     font=dict(size=11, color='black'),
     row=1, col=1
 )
 fig.add_annotation(
-    x=a + b/2, y=-1.2,
+    x=a + b/2, y=-1.3,
     text=f"b = {b:.2f} m",
     showarrow=False,
     font=dict(size=11, color='black'),
+    row=1, col=1
+)
+fig.add_annotation(
+    x=L/2, y=-1.6,
+    text=f"<b>L = {L:.2f} m</b>",
+    showarrow=False,
+    font=dict(size=12, color='black', family='Arial Black'),
     row=1, col=1
 )
 
@@ -258,7 +429,6 @@ x_despues = x[x >= a]
 V_antes = cortante[x < a]
 V_despues = cortante[x >= a]
 
-# Área positiva
 if len(x_antes) > 0:
     fig.add_trace(
         go.Scatter(x=x_antes, y=V_antes, mode='lines',
@@ -270,7 +440,6 @@ if len(x_antes) > 0:
         row=2, col=1
     )
 
-# Área negativa
 if len(x_despues) > 0:
     fig.add_trace(
         go.Scatter(x=x_despues, y=V_despues, mode='lines',
@@ -282,7 +451,6 @@ if len(x_despues) > 0:
         row=2, col=1
     )
 
-# Línea del diagrama
 fig.add_trace(
     go.Scatter(x=x, y=cortante, mode='lines',
                line=dict(color='darkblue', width=3),
@@ -294,7 +462,6 @@ fig.add_trace(
 fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5, row=2, col=1)
 fig.add_vline(x=a, line_dash="dot", line_color="red", opacity=0.5, row=2, col=1)
 
-# Anotaciones de valores en el cortante - MÁS VISIBLES
 fig.add_annotation(
     x=a/2, y=R_A,
     text=f"<b>{R_A:.2f} kN</b>",
@@ -329,9 +496,9 @@ fig.add_annotation(
     row=2, col=1
 )
 
-# 3. DIAGRAMA DE MOMENTO - INVERTIDO (positivo hacia abajo)
+# 3. DIAGRAMA DE MOMENTO
 fig.add_trace(
-    go.Scatter(x=x, y=-momento, mode='lines',  # INVERTIDO CON -momento
+    go.Scatter(x=x, y=-momento, mode='lines',
                line=dict(color='darkorange', width=3),
                fill='tozeroy',
                fillcolor='rgba(255, 165, 0, 0.4)',
@@ -343,10 +510,9 @@ fig.add_trace(
 fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5, row=3, col=1)
 fig.add_vline(x=a, line_dash="dot", line_color="red", opacity=0.5, row=3, col=1)
 
-# Momento máximo - MÁS VISIBLE
 fig.add_annotation(
     x=pos_max_momento, 
-    y=-max_momento,  # INVERTIDO
+    y=-max_momento,
     text=f"<b>M_máx = {max_momento:.2f} kN·m</b>",
     showarrow=True,
     arrowhead=2,
@@ -362,9 +528,9 @@ fig.add_annotation(
     row=3, col=1
 )
 
-# 4. DIAGRAMA DE DEFLEXIÓN - INVERTIDO (positivo hacia abajo)
+# 4. DIAGRAMA DE DEFLEXIÓN
 fig.add_trace(
-    go.Scatter(x=x, y=-deflexion, mode='lines',  # INVERTIDO CON -deflexion
+    go.Scatter(x=x, y=-deflexion, mode='lines',
                line=dict(color='darkgreen', width=3),
                fill='tozeroy',
                fillcolor='rgba(0, 180, 0, 0.3)',
@@ -376,10 +542,9 @@ fig.add_trace(
 fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5, row=4, col=1)
 fig.add_vline(x=a, line_dash="dot", line_color="red", opacity=0.5, row=4, col=1)
 
-# Deflexión máxima - MÁS VISIBLE
 fig.add_annotation(
     x=pos_max_deflexion, 
-    y=-max_deflexion,  # INVERTIDO
+    y=-max_deflexion,
     text=f"<b>δ_máx = {max_deflexion:.3f} mm</b>",
     showarrow=True,
     arrowhead=2,
@@ -538,26 +703,24 @@ with st.expander("📐 Ver fórmulas y convenciones de signos"):
 # Información adicional
 st.sidebar.markdown("---")
 st.sidebar.info("""
-**ℹ️ Convenciones de Diagramas:**
+**ℹ️ Tipos de Apoyos:**
 
-**Cortante (V):**
-- Positivo: zona azul
-- Negativo: zona roja
+🔷 **Articulado:**
+- Restringe X e Y
+- Permite rotación
+- 2 reacciones (Rx, Ry)
 
-**Momento (M):**
-- ✅ Positivo → graficado ABAJO
-- (Tracción en fibra inferior)
+🔵 **Rodillo:**
+- Restringe solo Y
+- Permite X y rotación
+- 1 reacción (Ry)
 
-**Deflexión (δ):**
-- ✅ Positiva → graficado ABAJO
-- (Desplazamiento hacia abajo)
-
-📌 **Criterio tradicional de ingeniería:**
-Los diagramas de M y δ positivos 
-se dibujan del lado de las fibras 
-traccionadas (hacia abajo).
+⬛ **Empotrado:**
+- Restringe X, Y y rotación
+- 3 reacciones (Rx, Ry, M)
+- (No soportado en esta versión)
 """)
 
 st.sidebar.markdown("---")
-st.sidebar.success("✨ Versión 2.1 - Diagramas tradicionales")
+st.sidebar.success("✨ Versión 2.2 - Apoyos configurables")
 st.sidebar.markdown("Desarrollado con ❤️ usando Streamlit")
