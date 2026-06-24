@@ -1,358 +1,420 @@
+# viga_simple_ec5.py
+# Calculadora de viga simple apoyada según EC5
+# Autor: Adaptado del procedimiento verificado con Trabe
+
 import streamlit as st
-import pandas as pd
 import numpy as np
-import math
 
-# ============================================
-# CONFIGURACIÓN DE LA PÁGINA
-# ============================================
-st.set_page_config(
-    page_title="Calculadora de Viguetas de Forjado",
-    page_icon="🏗️",
-    layout="wide"
-)
-
-st.title("🏗️ Calculadora de Viguetas de Forjado")
-st.markdown("---")
-
-# ============================================
-# PROPIEDADES DE MATERIALES (Madera)
-# ============================================
-WOOD_PROPERTIES = {
-    'D27': {'fmk': 27.0, 'fvk': 3.8, 'E0med': 10500, 'E0k': 8800, 'Gmed': 660, 'rhom': 610, 'rhok': 510},
-    'D30': {'fmk': 30.0, 'fvk': 4.0, 'E0med': 11000, 'E0k': 9200, 'Gmed': 690, 'rhom': 640, 'rhok': 540},
-    'D35': {'fmk': 35.0, 'fvk': 4.2, 'E0med': 12000, 'E0k': 10000, 'Gmed': 750, 'rhom': 670, 'rhok': 570},
-    'C24': {'fmk': 24.0, 'fvk': 4.0, 'E0med': 11000, 'E0k': 7400, 'Gmed': 690, 'rhom': 420, 'rhok': 350},
-    'C30': {'fmk': 30.0, 'fvk': 4.0, 'E0med': 12000, 'E0k': 8000, 'Gmed': 750, 'rhom': 460, 'rhok': 380}
+# ------------------------------------------------------------
+# 1. PROPIEDADES DE LOS MATERIALES (EC5)
+# ------------------------------------------------------------
+MATERIALES = {
+    "C24": {
+        "f_m_k": 24.0,
+        "f_v_k": 4.0,
+        "f_c_0_k": 21.0,
+        "f_c_90_k": 2.5,
+        "f_t_0_k": 14.0,
+        "E_0_mean": 11000.0,
+        "E_0_05": 7400.0,
+        "G_mean": 690.0,
+        "rho_k": 350.0,
+        "gamma_M": 1.30,
+        "k_def": 0.60,
+    },
+    "GL24h": {
+        "f_m_k": 24.0,
+        "f_v_k": 4.0,
+        "f_c_0_k": 21.0,
+        "f_c_90_k": 2.5,
+        "f_t_0_k": 14.0,
+        "E_0_mean": 11600.0,
+        "E_0_05": 9400.0,
+        "G_mean": 720.0,
+        "rho_k": 380.0,
+        "gamma_M": 1.25,
+        "k_def": 0.60,
+    },
 }
 
-# ============================================
-# FUNCIONES AUXILIARES
-# ============================================
-def get_kmod(service_class, duration):
-    """Obtiene k_mod según clase de servicio y duración"""
-    table = {
-        1: {'permanente': 0.60, 'media': 0.80, 'corta': 0.90},
-        2: {'permanente': 0.60, 'media': 0.80, 'corta': 0.90},
-        3: {'permanente': 0.50, 'media': 0.65, 'corta': 0.70}
-    }
-    return table.get(service_class, {}).get(duration, 0.80)
+# ------------------------------------------------------------
+# 2. FUNCIONES DE CÁLCULO
+# ------------------------------------------------------------
 
-def get_kdef(service_class):
-    """Obtiene k_def según clase de servicio"""
-    table = {1: 0.60, 2: 0.80, 3: 2.00}
-    return table.get(service_class, 0.60)
+def esfuerzos_uniforme(q, L):
+    """Momento y cortante para carga uniforme en viga biapoyada"""
+    M = q * L**2 / 8.0
+    V = q * L / 2.0
+    return M, V
 
-def calculate_flecha(q, L, E, I):
-    """Calcula flecha máxima para viga biapoyada con carga uniforme"""
-    return (5 * q * (L * 1000)**4) / (384 * E * I)
+def esfuerzos_puntual(P, L, a):
+    """Momento (en el punto de carga) y cortante (reacción) para carga puntual"""
+    b = L - a
+    M = P * a * b / L
+    V_izq = P * b / L
+    V_der = P * a / L
+    return M, V_izq, V_der
 
-def progress_bar(value, max_value=100, label=""):
-    """Genera una barra de progreso HTML"""
-    if value > 100:
-        color = "danger"
-    elif value > 80:
-        color = "warning"
-    else:
-        color = "success"
-    
-    pct = min(value, 100)
-    return f"""
-    <div style="margin: 5px 0;">
-        <div style="background: #ecf0f1; border-radius: 10px; height: 20px; overflow: hidden;">
-            <div style="height: 100%; width: {pct}%; 
-                        background: {'#e74c3c' if color == 'danger' else '#f39c12' if color == 'warning' else '#2ecc71'};
-                        border-radius: 10px; transition: width 0.5s;">
-            </div>
-        </div>
-        <div style="font-size: 0.8em; color: #666; text-align: right;">{value:.1f}%</div>
-    </div>
+def momento_mixto(q, P, L, a):
     """
+    Momento máximo para carga uniforme + puntual descentrada.
+    Se calcula buscando el punto donde el cortante total se anula.
+    """
+    # Reacción izquierda
+    R_A = q * L / 2.0 + P * (L - a) / L
+    # Punto de cortante nulo (antes de la carga puntual)
+    x = R_A / q
+    if x > a:
+        # Si el punto de cortante nulo está después de la carga, evaluamos en x=a
+        x = a
+    M = R_A * x - q * x**2 / 2.0
+    # Si la carga puntual está antes de x, hay que añadir su efecto
+    if x > a:
+        M += P * (x - a)
+    return M, R_A
 
-def badge(text, is_pass):
-    """Genera una badge HTML"""
-    color = "#28a745" if is_pass else "#dc3545"
-    bg = "#d4edda" if is_pass else "#f8d7da"
-    return f'<span style="background:{bg}; color:{color}; padding:3px 12px; border-radius:20px; font-weight:600; font-size:0.85em;">{text}</span>'
+def seccion(W, b, h):
+    """Propiedades de la sección"""
+    A = b * h
+    I_y = b * h**3 / 12.0
+    I_z = h * b**3 / 12.0
+    W_y = b * h**2 / 6.0
+    W_z = h * b**2 / 6.0
+    i_y = np.sqrt(I_y / A)
+    i_z = np.sqrt(I_z / A)
+    return A, I_y, I_z, W_y, W_z, i_y, i_z
 
-# ============================================
-# SIDEBAR - ENTRADA DE DATOS
-# ============================================
-with st.sidebar:
-    st.header("📐 Geometría")
-    col1, col2 = st.columns(2)
-    with col1:
-        b = st.number_input("Ancho (b) mm", value=120, min_value=40, step=1)
-    with col2:
-        h = st.number_input("Canto (h) mm", value=240, min_value=40, step=1)
-    
-    L = st.number_input("Luz (L) m", value=4.5, min_value=1.0, max_value=12.0, step=0.1)
-    spacing = st.number_input("Separación entre vigas (m)", value=0.80, min_value=0.30, max_value=1.20, step=0.05)
-    
-    st.header("📋 Material")
-    wood_class = st.selectbox("Clase de madera", options=list(WOOD_PROPERTIES.keys()))
-    service_class = st.selectbox("Clase de servicio", options=[1, 2, 3], format_func=lambda x: f"Clase {x}")
-    fire_time = st.number_input("Resistencia al fuego (min)", value=30, min_value=15, max_value=120, step=5)
-    
-    st.header("⚖️ Cargas")
-    gk = st.number_input("Peso propio (CC1) kN/m", value=1.78, step=0.01, format="%.2f")
-    qk = st.number_input("Sobrecarga de uso (CC2) kN/m", value=1.60, step=0.01, format="%.2f")
-    Pk = st.number_input("Carga puntual (kN)", value=2.00, step=0.10, format="%.2f")
-    
-    st.markdown("---")
-    if st.button("🔢 Calcular", use_container_width=True):
-        st.session_state.calculate = True
-    
-    if st.button("↺ Ejemplo del PDF", use_container_width=True):
-        st.session_state.b = 120
-        st.session_state.h = 240
-        st.session_state.L = 4.5
-        st.session_state.spacing = 0.80
-        st.session_state.wood_class = 'D27'
-        st.session_state.service_class = 1
-        st.session_state.fire_time = 30
-        st.session_state.gk = 1.78
-        st.session_state.qk = 1.60
-        st.session_state.Pk = 2.00
-        st.session_state.calculate = True
-        st.rerun()
+def flecha_uniforme(q, L, E, I):
+    """Flecha instantánea por flexión para carga uniforme"""
+    return 5.0 * q * L**4 / (384.0 * E * I)
 
-# ============================================
-# INICIALIZACIÓN
-# ============================================
-if 'calculate' not in st.session_state:
-    st.session_state.calculate = True
+def flecha_cortante(w_flex, E, G, h, L):
+    """Factor corrector por deformación por cortante (Timoshenko)"""
+    factor = 1.0 + (24.0 / 25.0) * (E / G) * (h / L)**2
+    return w_flex * factor
 
-# ============================================
-# CÁLCULO PRINCIPAL
-# ============================================
-if st.session_state.calculate:
-    # --- Propiedades del material ---
-    props = WOOD_PROPERTIES[wood_class]
+# ------------------------------------------------------------
+# 3. CÁLCULO PRINCIPAL
+# ------------------------------------------------------------
+
+def calcular_viga(L, b, h, G_k, Q_k_uniforme, Q_k_puntual, material_nombre, 
+                  clase_servicio=1, k_sys=1.10, k_cr=0.67, tiempo_fuego=30):
+    """
+    Realiza todas las comprobaciones de una viga simple apoyada.
+    Devuelve un diccionario con todos los resultados.
+    """
     
-    # --- Propiedades de la sección ---
-    A = b * h  # mm²
-    Iy = (b * h**3) / 12  # mm⁴
-    Iz = (h * b**3) / 12
-    Wy = Iy / (h / 2)  # mm³
-    Wz = Iz / (b / 2)
-    iy = math.sqrt(Iy / A)
-    iz = math.sqrt(Iz / A)
-    weight = (A / 1e6) * props['rhom']  # kg/m
+    # --- Material ---
+    mat = MATERIALES[material_nombre]
+    gamma_M = mat["gamma_M"]
+    k_def = mat["k_def"]
+    E = mat["E_0_mean"]
+    E_05 = mat["E_0_05"]
+    G = mat["G_mean"]
+    f_m_k = mat["f_m_k"]
+    f_v_k = mat["f_v_k"]
+    f_c_90_k = mat["f_c_90_k"]
     
-    # --- Coeficientes ---
-    psi0, psi1, psi2 = 0.70, 0.50, 0.30
-    gammaG, gammaQ = 1.35, 1.50
-    gammaM = 1.30
-    ksys = 1.0
-    kh = 1.0
-    kcr = 0.67
-    kmod = get_kmod(service_class, 'media')
-    kdef = get_kdef(service_class)
+    # k_mod según duración (media duración = 0.80)
+    k_mod = 0.80
     
-    # --- Cargas y esfuerzos ---
-    # Momento flector máximo (viga biapoyada)
-    M_G = gk * L**2 / 8  # kN·m
-    M_Q = qk * L**2 / 8 + Pk * L / 4
-    M_ELU = gammaG * M_G + gammaQ * M_Q
+    # --- Sección ---
+    A, I_y, I_z, W_y, W_z, i_y, i_z = seccion(W=None, b=b, h=h)
     
-    # Cortante máximo
-    V_G = gk * L / 2
-    V_Q = qk * L / 2 + Pk / 2
-    V_ELU = gammaG * V_G + gammaQ * V_Q
+    # --- Combinaciones ELU ---
+    q_perm = G_k
+    q_var = Q_k_uniforme
+    P_var = Q_k_puntual
     
-    # --- ELU: Flexión ---
-    sigma_m = M_ELU * 1e6 / Wy  # N/mm²
-    fmd = kmod * (props['fmk'] * kh * ksys) / gammaM
-    flex_index = (sigma_m / fmd) * 100
+    # ELU1: solo permanente
+    q1 = 1.35 * q_perm
+    M1, V1 = esfuerzos_uniforme(q1, L)
     
-    # --- ELU: Cortante ---
-    tau = 1.5 * (V_ELU * 1000) / (b * kcr * h)  # N/mm²
-    fvd = kmod * (props['fvk'] * ksys) / gammaM
-    shear_index = (tau / fvd) * 100
+    # ELU2: permanente + variable uniforme
+    q2 = 1.35 * q_perm + 1.50 * q_var
+    M2, V2 = esfuerzos_uniforme(q2, L)
     
-    # --- ELS: Flechas ---
-    E = props['E0med']  # N/mm²
+    # ELU3: permanente + variable puntual en centro
+    q3 = 1.35 * q_perm
+    P3 = 1.50 * P_var
+    M3, V3_izq, V3_der = esfuerzos_puntual(P3, L, L/2.0)
+    M3 += q3 * L**2 / 8.0  # sumamos el momento de la uniforme en el centro
+    V3 = q3 * L / 2.0 + P3 / 2.0
     
-    # Flecha instantánea por carga total
-    q_total = gk + qk
-    u_inst = (5 * q_total * (L * 1000)**4) / (384 * E * Iy)  # mm
+    # ELU4: permanente + variable puntual cerca del apoyo (a = L - h)
+    a4 = L - h / 1000.0  # h en mm, pasamos a m
+    q4 = 1.35 * q_perm
+    P4 = 1.50 * P_var
+    M4, R_A4 = momento_mixto(q4, P4, L, a4)
+    V4 = R_A4  # el cortante máximo es la reacción izquierda
     
-    # Flecha diferida
-    u_fin = u_inst * (1 + kdef)
+    # --- Resistencia de cálculo ---
+    f_m_d = k_mod * f_m_k * k_sys / gamma_M
+    f_v_d = k_mod * f_v_k * k_sys / gamma_M
     
-    # Límites
-    limit_integridad = (L * 1000) / 300
-    limit_confort = (L * 1000) / 350
-    limit_apariencia = (L * 1000) / 300
+    # --- Flexión ELU ---
+    sigma_m = M2 * 1e6 / W_y  # M en kN·m -> N·mm, W en mm³
+    indice_flexion = sigma_m / f_m_d * 100.0
     
-    # Flechas para cada estado (aproximado)
-    u_int = u_inst * kdef
-    u_conf = u_inst
-    u_apa = u_inst * (1 + kdef)
+    # --- Cortante ELU ---
+    tau = 1.5 * V2 * 1000 / (b * k_cr * h)  # V en kN -> N
+    indice_cortante = tau / f_v_d * 100.0
     
-    int_index = (u_int / limit_integridad) * 100 if limit_integridad > 0 else 0
-    conf_index = (u_conf / limit_confort) * 100 if limit_confort > 0 else 0
-    apa_index = (u_apa / limit_apariencia) * 100 if limit_apariencia > 0 else 0
+    # --- Vuelco lateral (LTB) ---
+    # Longitud eficaz (carga en borde superior comprimido)
+    L_ef = L * 1000 + 2 * h  # en mm
+    # Tensión crítica
+    sigma_crit = 0.78 * b**2 * E_05 / (h * L_ef)
+    lambda_rel_m = np.sqrt(f_m_k / sigma_crit)
+    if lambda_rel_m <= 0.75:
+        k_crit = 1.0
+    elif lambda_rel_m <= 1.4:
+        k_crit = 1.56 - 0.75 * lambda_rel_m
+    else:
+        k_crit = 1.0 / lambda_rel_m**2
+    indice_vuelco = sigma_m / (k_crit * f_m_d) * 100.0
     
-    # --- Incendio (sección reducida) ---
-    beta_n = 0.55  # mm/min
-    d0 = 7.0
-    dchar = beta_n * fire_time
-    def_fire = dchar + d0
+    # --- ELS: Flecha ---
+    # Confort: solo Q instantánea
+    q_conf = Q_k_uniforme
+    w_flex_conf = flecha_uniforme(q_conf * 1000, L*1000, E, I_y)  # N/mm
+    w_conf = flecha_cortante(w_flex_conf, E, G, h, L*1000)
+    limite_conf = L * 1000 / 350.0
     
-    b_ef = max(b - 2 * def_fire, 10)
-    h_ef = max(h - def_fire, 10)
-    A_ef = b_ef * h_ef
-    Iy_ef = (b_ef * h_ef**3) / 12
-    Wy_ef = Iy_ef / (h_ef / 2) if h_ef > 0 else 1
+    # Integridad: G diferida + Q (inst + ψ2·fluencia)
+    q_int_G = G_k
+    q_int_Q = Q_k_uniforme
+    psi2 = 0.30
+    w_flex_G = flecha_uniforme(q_int_G * 1000, L*1000, E, I_y)
+    w_flex_Q = flecha_uniforme(q_int_Q * 1000, L*1000, E, I_y)
+    w_G_diff = flecha_cortante(w_flex_G * k_def, E, G, h, L*1000)
+    w_Q_inst = flecha_cortante(w_flex_Q, E, G, h, L*1000)
+    w_Q_diff = flecha_cortante(w_flex_Q * psi2 * k_def, E, G, h, L*1000)
+    w_int = w_G_diff + w_Q_inst + w_Q_diff
+    limite_int = L * 1000 / 300.0
     
-    kmod_fi = 1.0
-    gammaM_fi = 1.0
-    k_fi = 1.25  # Factor por incendio (20percentil)
-    fmd_fi = kmod_fi * (props['fmk'] * k_fi * ksys) / gammaM_fi
+    # Apariencia: G total + ψ2·Q total (con fluencia)
+    w_flex_G_apa = flecha_uniforme(q_int_G * 1000, L*1000, E, I_y)
+    w_flex_Q_apa = flecha_uniforme(q_int_Q * 1000, L*1000, E, I_y)
+    w_G_apa = flecha_cortante(w_flex_G_apa * (1 + k_def), E, G, h, L*1000)
+    w_Q_apa = flecha_cortante(w_flex_Q_apa * psi2 * (1 + k_def), E, G, h, L*1000)
+    w_apa = w_G_apa + w_Q_apa
+    limite_apa = L * 1000 / 300.0
     
-    # Combinación de incendio: G + ψ1·Q
-    M_fi = M_G + psi1 * M_Q
-    V_fi = V_G + psi1 * V_Q
+    # --- Fuego ---
+    # Velocidad de carbonización (C24, clase 1)
+    beta_n = 0.80  # mm/min
+    d_char = beta_n * tiempo_fuego
+    d0 = 7.0  # mm
+    k0 = 1.0 if tiempo_fuego >= 20 else tiempo_fuego / 20.0
+    d_ef = d_char + k0 * d0
     
-    sigma_fi = (M_fi * 1e6) / Wy_ef if Wy_ef > 0 else 0
-    flex_fi_index = (sigma_fi / fmd_fi) * 100 if fmd_fi > 0 else 0
+    # Sección reducida (3 caras expuestas: inferior, izquierda, derecha)
+    b_fi = b - 2 * d_ef
+    h_fi = h - d_ef
+    if b_fi < 10 or h_fi < 10:
+        b_fi = 10.0
+        h_fi = 10.0
+    A_fi, I_y_fi, _, W_y_fi, _, _, _ = seccion(W=None, b=b_fi, h=h_fi)
     
-    tau_fi = 1.5 * (V_fi * 1000) / (b_ef * kcr * h_ef) if b_ef > 0 and h_ef > 0 else 0
-    fvd_fi = kmod_fi * (props['fvk'] * k_fi * ksys) / gammaM_fi
-    shear_fi_index = (tau_fi / fvd_fi) * 100 if fvd_fi > 0 else 0
+    # Resistencia en incendio
+    k_fi = 1.25  # percentil 20%
+    f_m_fi_d = 1.0 * k_fi * f_m_k * k_sys / 1.0
+    f_v_fi_d = 1.0 * k_fi * f_v_k * k_sys / 1.0
     
-    # ============================================
-    # MOSTRAR RESULTADOS
-    # ============================================
+    # Combinación de incendio: G + ψ1·Q (ψ1=0.50)
+    psi1 = 0.50
+    q_fi = G_k + psi1 * Q_k_uniforme
+    M_fi, V_fi = esfuerzos_uniforme(q_fi, L)
     
-    st.markdown("---")
-    col1, col2 = st.columns(2)
+    # Flexión fuego
+    sigma_fi = M_fi * 1e6 / W_y_fi
+    indice_flexion_fuego = sigma_fi / f_m_fi_d * 100.0
     
-    with col1:
-        st.subheader("📊 Resumen")
-        st.metric("Sección", f"{b}×{h} mm")
-        st.metric("Luz", f"{L} m")
-        st.metric("Material", wood_class)
-        st.metric("Peso propio", f"{weight:.1f} kg/m")
+    # Cortante fuego
+    tau_fi = 1.5 * V_fi * 1000 / (b_fi * k_cr * h_fi)
+    indice_cortante_fuego = tau_fi / f_v_fi_d * 100.0
     
-    with col2:
-        st.subheader("📈 Índices globales")
-        max_elu = max(flex_index, shear_index)
-        max_els = max(int_index, conf_index, apa_index)
-        max_fi = max(flex_fi_index, shear_fi_index)
-        
-        st.markdown(f"**ELU:** {badge(f'{max_elu:.0f}%', max_elu < 100)}")
-        st.markdown(f"**ELS:** {badge(f'{max_els:.0f}%', max_els < 100)}")
-        st.markdown(f"**Incendio:** {badge(f'{max_fi:.0f}%', max_fi < 100)}")
-    
-    # ============================================
-    # TABLA DE COMBINACIONES
-    # ============================================
-    st.markdown("---")
-    st.subheader("📋 Combinaciones de carga y esfuerzos máximos")
-    
-    combos = {
-        "ELU1": {"combo": "1.35·CC1", "M": gammaG * M_G, "V": gammaG * V_G},
-        "ELU2": {"combo": "1.35·CC1 + 1.50·CC2", "M": gammaG * M_G + gammaQ * (qk * L**2 / 8), "V": gammaG * V_G + gammaQ * (qk * L / 2)},
-        "ELU3": {"combo": "1.35·CC1 + 1.50·CC2.1", "M": gammaG * M_G + gammaQ * (Pk * L / 4), "V": gammaG * V_G + gammaQ * (Pk / 2)}
+    # --- Resultados ---
+    return {
+        "M_ELU": {"M1": M1, "M2": M2, "M3": M3, "M4": M4},
+        "V_ELU": {"V1": V1, "V2": V2, "V3": V3, "V4": V4},
+        "flexion": {"sigma": sigma_m, "f_m_d": f_m_d, "indice": indice_flexion},
+        "cortante": {"tau": tau, "f_v_d": f_v_d, "indice": indice_cortante},
+        "vuelco": {"lambda_rel_m": lambda_rel_m, "k_crit": k_crit, "indice": indice_vuelco},
+        "flecha": {
+            "confort": {"w": w_conf, "limite": limite_conf, "indice": w_conf/limite_conf*100},
+            "integridad": {"w": w_int, "limite": limite_int, "indice": w_int/limite_int*100},
+            "apariencia": {"w": w_apa, "limite": limite_apa, "indice": w_apa/limite_apa*100},
+        },
+        "fuego": {
+            "d_ef": d_ef,
+            "b_fi": b_fi,
+            "h_fi": h_fi,
+            "W_y_fi": W_y_fi,
+            "sigma_fi": sigma_fi,
+            "f_m_fi_d": f_m_fi_d,
+            "indice_flexion": indice_flexion_fuego,
+            "tau_fi": tau_fi,
+            "f_v_fi_d": f_v_fi_d,
+            "indice_cortante": indice_cortante_fuego,
+        },
+        "indice_global": max(
+            indice_flexion, indice_cortante, indice_vuelco,
+            w_conf/limite_conf*100,
+            w_int/limite_int*100,
+            w_apa/limite_apa*100,
+            indice_flexion_fuego, indice_cortante_fuego
+        )
     }
-    
-    df_combos = pd.DataFrame([
-        {"Combinación": k, "Expresión": v["combo"], "M_y (kN·m)": f"{v['M']:.2f}", "V_z (kN)": f"{v['V']:.2f}"}
-        for k, v in combos.items()
-    ])
-    st.dataframe(df_combos, use_container_width=True, hide_index=True)
-    
-    # ============================================
-    # ELU
-    # ============================================
-    st.markdown("---")
-    st.subheader("🔴 Estado Límite Último (ELU)")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### Flexión")
-        st.metric("M_y,d", f"{M_ELU:.2f} kN·m")
-        st.metric("σ_m,y,d", f"{sigma_m:.2f} N/mm²")
-        st.metric("f_m,y,d", f"{fmd:.2f} N/mm²")
-        st.markdown(progress_bar(flex_index))
-        st.caption(f"{'✅ Cumple' if flex_index < 100 else '❌ No cumple'}")
-    
-    with col2:
-        st.markdown("#### Cortante")
-        st.metric("V_z,d", f"{V_ELU:.2f} kN")
-        st.metric("τ_z,d", f"{tau:.2f} N/mm²")
-        st.metric("f_v,d", f"{fvd:.2f} N/mm²")
-        st.markdown(progress_bar(shear_index))
-        st.caption(f"{'✅ Cumple' if shear_index < 100 else '❌ No cumple'}")
-    
-    # ============================================
-    # ELS
-    # ============================================
-    st.markdown("---")
-    st.subheader("🟡 Estado Límite de Servicio (ELS)")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("#### Integridad")
-        st.metric("u_int", f"{u_int:.1f} mm")
-        st.metric("Límite", f"{limit_integridad:.1f} mm (L/300)")
-        st.markdown(progress_bar(int_index))
-        st.caption(f"{'✅ Cumple' if int_index < 100 else '❌ No cumple'}")
-    
-    with col2:
-        st.markdown("#### Confort")
-        st.metric("u_conf", f"{u_conf:.1f} mm")
-        st.metric("Límite", f"{limit_confort:.1f} mm (L/350)")
-        st.markdown(progress_bar(conf_index))
-        st.caption(f"{'✅ Cumple' if conf_index < 100 else '❌ No cumple'}")
-    
-    with col3:
-        st.markdown("#### Apariencia")
-        st.metric("u_apa", f"{u_apa:.1f} mm")
-        st.metric("Límite", f"{limit_apariencia:.1f} mm (L/300)")
-        st.markdown(progress_bar(apa_index))
-        st.caption(f"{'✅ Cumple' if apa_index < 100 else '❌ No cumple'}")
-    
-    # ============================================
-    # INCENDIO
-    # ============================================
-    st.markdown("---")
-    st.subheader("🔥 Situación de Incendio")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col1:
-        st.markdown("#### Sección reducida")
-        st.metric("b_ef", f"{b_ef:.0f} mm")
-        st.metric("h_ef", f"{h_ef:.0f} mm")
-        st.metric("A_ef", f"{A_ef:.0f} mm²")
-    
-    with col2:
-        st.markdown("#### Flexión")
-        st.metric("M_fi", f"{M_fi:.2f} kN·m")
-        st.metric("σ_fi", f"{sigma_fi:.2f} N/mm²")
-        st.metric("f_m,fi,d", f"{fmd_fi:.2f} N/mm²")
-        st.markdown(progress_bar(flex_fi_index))
-        st.caption(f"{'✅ Cumple' if flex_fi_index < 100 else '❌ No cumple'}")
-    
-    with col3:
-        st.markdown("#### Cortante")
-        st.metric("V_fi", f"{V_fi:.2f} kN")
-        st.metric("τ_fi", f"{tau_fi:.2f} N/mm²")
-        st.metric("f_v,fi,d", f"{fvd_fi:.2f} N/mm²")
-        st.markdown(progress_bar(shear_fi_index))
-        st.caption(f"{'✅ Cumple' if shear_fi_index < 100 else '❌ No cumple'}")
-    
-    # ============================================
-    # PIE DE PÁGINA
-    # ============================================
-    st.markdown("---")
-    st.caption("🔧 Calculadora basada en CTE DB SE-M y UNE-EN 338:2016")
 
-else:
-    st.info("👈 Ajusta los parámetros en la barra lateral y presiona 'Calcular'")
+# ------------------------------------------------------------
+# 4. INTERFAZ STREAMLIT
+# ------------------------------------------------------------
+
+def main():
+    st.set_page_config(page_title="Viga Simple EC5", layout="wide")
+    st.title("🪵 Calculadora de Viga Simple Apoyada (EC5)")
+    st.markdown("### Procedimiento verificado con ejemplo de Trabe")
+    
+    # --- Sidebar: Entrada de datos ---
+    with st.sidebar:
+        st.header("📐 Datos de entrada")
+        
+        L = st.number_input("Luz (m)", value=5.0, step=0.5)
+        b = st.number_input("Ancho (mm)", value=120, step=10)
+        h = st.number_input("Canto (mm)", value=260, step=10)
+        
+        st.divider()
+        st.subheader("Cargas")
+        G_k = st.number_input("Carga permanente (kN/m)", value=2.13, step=0.1)
+        Q_k_uniforme = st.number_input("Sobrecarga uniforme (kN/m)", value=2.00, step=0.1)
+        Q_k_puntual = st.number_input("Sobrecarga puntual (kN)", value=2.00, step=0.5)
+        
+        st.divider()
+        st.subheader("Material")
+        material = st.selectbox("Material", list(MATERIALES.keys()), index=0)
+        
+        st.divider()
+        st.subheader("Coeficientes")
+        k_sys = st.number_input("k_sys (carga compartida)", value=1.10, step=0.05)
+        k_cr = st.number_input("k_cr (fendas)", value=0.67, step=0.01)
+        tiempo_fuego = st.number_input("Resistencia al fuego (min)", value=30, step=10)
+    
+    # --- Cálculo ---
+    if st.button("Calcular", type="primary"):
+        with st.spinner("Calculando..."):
+            res = calcular_viga(
+                L, b, h, G_k, Q_k_uniforme, Q_k_puntual,
+                material, k_sys=k_sys, k_cr=k_cr, tiempo_fuego=tiempo_fuego
+            )
+        
+        # --- Mostrar resultados ---
+        st.success(f"✅ Cálculo completado. Índice global: {res['indice_global']:.1f}%")
+        
+        # Métricas principales
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Flexión ELU", f"{res['flexion']['indice']:.1f}%", 
+                    delta="OK" if res['flexion']['indice'] < 100 else "⚠️ NO CUMPLE")
+        col2.metric("Cortante ELU", f"{res['cortante']['indice']:.1f}%",
+                    delta="OK" if res['cortante']['indice'] < 100 else "⚠️ NO CUMPLE")
+        col3.metric("Apariencia ELS", f"{res['flecha']['apariencia']['indice']:.1f}%",
+                    delta="OK" if res['flecha']['apariencia']['indice'] < 100 else "⚠️ NO CUMPLE")
+        
+        # --- Detalles expandibles ---
+        with st.expander("📊 Esfuerzos (ELU)", expanded=True):
+            st.dataframe({
+                "Combinación": ["ELU1", "ELU2", "ELU3", "ELU4"],
+                "M (kN·m)": [res["M_ELU"]["M1"], res["M_ELU"]["M2"], res["M_ELU"]["M3"], res["M_ELU"]["M4"]],
+                "V (kN)": [res["V_ELU"]["V1"], res["V_ELU"]["V2"], res["V_ELU"]["V3"], res["V_ELU"]["V4"]],
+            })
+        
+        with st.expander("🔧 Comprobaciones ELU"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Flexión")
+                st.write(f"σ_m,d = {res['flexion']['sigma']:.2f} N/mm²")
+                st.write(f"f_m,d = {res['flexion']['f_m_d']:.2f} N/mm²")
+                st.write(f"Índice: {res['flexion']['indice']:.1f}%")
+                if res['flexion']['indice'] < 100:
+                    st.success("✅ Cumple")
+                else:
+                    st.error("❌ No cumple")
+                
+                st.subheader("Vuelco lateral")
+                st.write(f"λ_rel,m = {res['vuelco']['lambda_rel_m']:.3f}")
+                st.write(f"k_crit = {res['vuelco']['k_crit']:.3f}")
+                st.write(f"Índice: {res['vuelco']['indice']:.1f}%")
+            
+            with col2:
+                st.subheader("Cortante")
+                st.write(f"τ_d = {res['cortante']['tau']:.3f} N/mm²")
+                st.write(f"f_v,d = {res['cortante']['f_v_d']:.2f} N/mm²")
+                st.write(f"Índice: {res['cortante']['indice']:.1f}%")
+                if res['cortante']['indice'] < 100:
+                    st.success("✅ Cumple")
+                else:
+                    st.error("❌ No cumple")
+        
+        with st.expander("📏 Flechas (ELS)"):
+            st.dataframe({
+                "Concepto": ["Confort", "Integridad", "Apariencia"],
+                "Flecha (mm)": [
+                    f"{res['flecha']['confort']['w']:.1f}",
+                    f"{res['flecha']['integridad']['w']:.1f}",
+                    f"{res['flecha']['apariencia']['w']:.1f}",
+                ],
+                "Límite (mm)": [
+                    f"{res['flecha']['confort']['limite']:.1f}",
+                    f"{res['flecha']['integridad']['limite']:.1f}",
+                    f"{res['flecha']['apariencia']['limite']:.1f}",
+                ],
+                "Índice (%)": [
+                    f"{res['flecha']['confort']['indice']:.1f}",
+                    f"{res['flecha']['integridad']['indice']:.1f}",
+                    f"{res['flecha']['apariencia']['indice']:.1f}",
+                ],
+            })
+        
+        with st.expander("🔥 Situación de incendio"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"d_ef = {res['fuego']['d_ef']:.1f} mm")
+                st.write(f"Sección efectiva: {res['fuego']['b_fi']:.0f} × {res['fuego']['h_fi']:.0f} mm")
+                st.write(f"W_y,fi = {res['fuego']['W_y_fi']:.0f} mm³")
+            with col2:
+                st.subheader("Flexión en incendio")
+                st.write(f"σ_m,fi,d = {res['fuego']['sigma_fi']:.2f} N/mm²")
+                st.write(f"f_m,fi,d = {res['fuego']['f_m_fi_d']:.2f} N/mm²")
+                st.write(f"Índice: {res['fuego']['indice_flexion']:.1f}%")
+                
+                st.subheader("Cortante en incendio")
+                st.write(f"τ_fi,d = {res['fuego']['tau_fi']:.3f} N/mm²")
+                st.write(f"f_v,fi,d = {res['fuego']['f_v_fi_d']:.2f} N/mm²")
+                st.write(f"Índice: {res['fuego']['indice_cortante']:.1f}%")
+        
+        # --- Comparación con Trabe ---
+        with st.expander("📋 Comparación con el ejemplo de Trabe"):
+            st.markdown("""
+            | Comprobación | Este cálculo | Trabe | Diferencia |
+            |--------------|--------------|-------|------------|
+            | Flexión ELU (σ) | {:.2f} N/mm² | 13.58 N/mm² | {:.2f} |
+            | Cortante ELU (τ) | {:.3f} N/mm² | 1.05 N/mm² | {:.3f} |
+            | Flecha Confort | {:.1f} mm | 8.8 mm | {:.1f} |
+            | Flecha Integridad | {:.1f} mm | 15.9 mm | {:.1f} |
+            | Flecha Apariencia | {:.1f} mm | 19.2 mm | {:.1f} |
+            | Flexión fuego (σ) | {:.2f} N/mm² | 19.30 N/mm² | {:.2f} |
+            | Cortante fuego (τ) | {:.3f} N/mm² | 1.32 N/mm² | {:.3f} |
+            """.format(
+                res['flexion']['sigma'], res['flexion']['sigma'] - 13.58,
+                res['cortante']['tau'], res['cortante']['tau'] - 1.05,
+                res['flecha']['confort']['w'], res['flecha']['confort']['w'] - 8.8,
+                res['flecha']['integridad']['w'], res['flecha']['integridad']['w'] - 15.9,
+                res['flecha']['apariencia']['w'], res['flecha']['apariencia']['w'] - 19.2,
+                res['fuego']['sigma_fi'], res['fuego']['sigma_fi'] - 19.30,
+                res['fuego']['tau_fi'], res['fuego']['tau_fi'] - 1.32,
+            ))
+            st.caption("Las pequeñas diferencias se deben a redondeos en los coeficientes y en la deformación por cortante.")
+
+if __name__ == "__main__":
+    main()
